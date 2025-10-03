@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Waste2Worth Company</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        // --- Firebase imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        setLogLevel('debug');
+
+        // --- Your Firebase config ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDYNO1kvzQCCPUxRU7MWy_Kbtpl_n8cbfM",
+            authDomain: "waste2worth-4059c.firebaseapp.com",
+            projectId: "waste2worth-4059c",
+            storageBucket: "waste2worth-4059c.appspot.com",
+            messagingSenderId: "319341068193",
+            appId: "1:319341068193:web:729943027994d005f355e0",
+            measurementId: "G-NZFKQQP58F"
+        };
+
+        // --- App State ---
+        const appId = 'waste2worth-default';
+        window.app = null;
+        window.db = null;
+        window.auth = null;
+        window.currentUserId = null;
+        window.currentView = 'loading';
+        window.userData = {};
+        window.isAuthReady = false;
+        window.message = { text: '', type: '' };
+
+        function showMessage(text, type = 'info') {
+            window.message = { text, type };
+            renderApp();
+            setTimeout(() => {
+                window.message = { text: '', type: '' };
+                renderApp();
+            }, 3000);
+        }
+        function getUserDocRef(uid) {
+            return doc(db, "artifacts", appId, "users", uid, "profile_data", "profile_doc");
+        }
+
+        async function initializeAndAuthenticate() {
+            if (!firebaseConfig || !firebaseConfig.apiKey) {
+                showMessage("Firebase setup error. Please paste your config!", "error");
+                window.currentView = 'login';
+                renderApp();
+                return;
+            }
+            try {
+                window.app = initializeApp(firebaseConfig);
+                window.db = getFirestore(window.app);
+                window.auth = getAuth(window.app);
+                onAuthStateChanged(window.auth, async (user) => {
+                    if (user) {
+                        window.currentUserId = user.uid;
+                        window.isAuthReady = true;
+                        setupUserDataListener(user.uid);
+                    } else {
+                        window.currentUserId = null;
+                        window.isAuthReady = true;
+                        window.userData = {};
+                        window.currentView = 'login';
+                        renderApp();
+                    }
+                });
+                window.currentView = 'login';
+                renderApp();
+            } catch (error) {
+                showMessage(`Initialization failed: ${error.message}`, "error");
+                window.currentView = 'login';
+                renderApp();
+            }
+        }
+        function setupUserDataListener(uid) {
+            if (!window.db || !window.isAuthReady) return;
+            const docRef = getUserDocRef(uid);
+            onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    window.userData = docSnap.data();
+                    window.currentView = 'menu';
+                    renderApp();
+                } else {
+                    window.currentView = 'signup';
+                    renderApp();
+                }
+            }, (error) => {
+                showMessage("Failed to load profile.", "error");
+                window.currentView = 'login';
+                renderApp();
+            });
+        }
+        window.navigateTo = (view) => {
+            window.currentView = view;
+            window.message = { text: '', type: '' };
+            renderApp();
+        };
+        window.handleSignUp = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const name = form.name.value.trim();
+            const email = form.email.value.trim();
+            const password = form.password.value;
+            const dob = form.dob.value;
+            if (!name || !email || !password || !dob) {
+                showMessage("Please fill out all fields.", "error");
+                return;
+            }
+            try {
+                const userCredential = await createUserWithEmailAndPassword(window.auth, email, password);
+                const user = userCredential.user;
+                const initialData = {
+                    name,
+                    email,
+                    dob,
+                    createdAt: new Date().toISOString(),
+                    foodWasteKg: 0,
+                    pickupTime: '',
+                    pickupDay: '',
+                    voucherCount: 0,
+                    membership: "Free"
+                };
+                await setDoc(getUserDocRef(user.uid), initialData);
+                showMessage("Sign Up successful! Redirecting to Menu.", "success");
+            } catch (error) {
+                showMessage(`Registration failed: ${error.message}`, "error");
+            }
+        };
+        window.handleLogin = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const email = form.email.value.trim();
+            const password = form.password.value;
+            if (!email || !password) {
+                showMessage("Please enter email and password.", "error");
+                return;
+            }
+            try {
+                const userCredential = await signInWithEmailAndPassword(window.auth, email, password);
+                const user = userCredential.user;
+                const docSnap = await getDoc(getUserDocRef(user.uid));
+                if (docSnap.exists()) {
+                    showMessage("Login successful!", "success");
+                } else {
+                    showMessage("Account not found. Please sign up.", "info");
+                    window.currentView = 'signup';
+                    renderApp();
+                }
+            } catch (error) {
+                showMessage(`Login failed: ${error.message}`, "error");
+            }
+        };
+        window.handleCollectReward = async () => {
+            if (window.userData.voucherCount > 0) {
+                try {
+                    const newCount = window.userData.voucherCount - 1;
+                    await setDoc(getUserDocRef(window.currentUserId), {
+                        ...window.userData,
+                        voucherCount: newCount
+                    });
+                    showMessage("Reward collected! Your voucher count is updated.", "success");
+                } catch (error) {
+                    showMessage("Failed to process reward. Try again later.", "error");
+                }
+            } else {
+                showMessage("No vouchers available to collect.", "info");
+            }
+        };
+        window.handleLogout = async () => {
+            try {
+                if (window.auth) await signOut(window.auth);
+                showMessage("Logged out successfully.", "info");
+                window.currentView = 'login';
+                window.userData = {};
+                renderApp();
+            } catch (error) {
+                showMessage(`Logout failed: ${error.message}`, "error");
+            }
+        };
+        window.handleUpgradeMembership = async (type) => {
+            let newMembership = "Free";
+            let voucherCount = window.userData.voucherCount || 0;
+            let savings = 0;
+            if (type === "Monthly") {
+                newMembership = "Monthly";
+                voucherCount += 1;
+                savings = 20;
+            } else if (type === "Yearly") {
+                newMembership = "Yearly";
+                voucherCount += 12;
+                savings = 300;
+            }
+            try {
+                await setDoc(getUserDocRef(window.currentUserId), {
+                    ...window.userData,
+                    membership: newMembership,
+                    voucherCount: voucherCount
+                });
+                showMessage(`Upgraded to ${type} Membership! You now have ${voucherCount} voucher(s) and saved AED ${savings}.`, "success");
+            } catch (error) {
+                showMessage("Membership upgrade failed.", "error");
+            }
+        };
+        function renderMessage() {
+            if (!window.message.text) return '';
+            const bgColor = window.message.type === 'error' ? 'bg-red-500' : 
+                            window.message.type === 'success' ? 'bg-green-500' : 'bg-blue-500';
+            return `
+                <div id="message-box" class="fixed top-4 left-1/2 transform -translate-x-1/2 p-3 ${bgColor} text-white text-sm font-semibold rounded-lg shadow-xl z-50 transition-opacity duration-300">
+                    ${window.message.text}
+                </div>
+            `;
+        }
+        function renderHeader(title) {
+            return `
+                <header class="w-full flex justify-between items-center p-4">
+                    <h1 class="text-white text-lg font-serif tracking-wider">waste2worth Company</h1>
+                    <p class="text-white text-lg opacity-70 font-sans">Page 09</p>
+                </header>
+            `;
+        }
+        function renderSignUp() {
+            return `
+                <div class="h-full flex flex-col items-center justify-center p-6">
+                    ${renderHeader('Sign Up')}
+                    <div class="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 md:p-8 flex-grow max-h-[85vh] overflow-y-auto">
+                        <div class="mb-6">
+                            <h2 class="text-5xl font-serif text-green-900 mb-2">Sign Up</h2>
+                            <p class="text-gray-600 text-sm">Already registered? <a href="#" onclick="navigateTo('login')" class="text-green-700 font-semibold hover:underline">Sign in</a></p>
+                        </div>
+                        <form onsubmit="handleSignUp(event)" class="space-y-5">
+                            <div class="flex justify-center mb-6">
+                                <img src="https://placehold.co/200x100/1E4620/ffffff?text=Recycle" class="rounded-xl shadow-md" alt="Recycling illustration">
+                            </div>
+                            ${renderInput('Name', 'text', 'name', 'Your Full Name', '👤')}
+                            ${renderInput('Email', 'email', 'email', 'name@example.com', '✉️')}
+                            ${renderInput('Password', 'password', 'password', '6+ characters', '🔒')}
+                            ${renderInput('Date of Birth (YYYY-MM-DD)', 'date', 'dob', 'e.g., 1990-01-01', '🗓️')}
+                            <button type="submit" class="w-full flex justify-center items-center py-3 bg-green-600 text-white text-xl rounded-xl shadow-lg hover:bg-green-700 transition duration-200 mt-6">
+                                Sign Up <span class="ml-2 text-2xl">→</span>
+                            </button>
+                        </form>
+                    </div>
+                    <p class="text-xs text-green-300 mt-2">Current User ID: ${window.currentUserId || 'N/A'}</p>
+                </div>
+            `;
+        }
+        function renderLogin() {
+            return `
+                <div class="h-full flex flex-col items-center justify-center p-6">
+                    ${renderHeader('Login')}
+                    <div class="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 md:p-8 flex-grow max-h-[85vh] overflow-y-auto">
+                        <div class="mb-6">
+                            <h2 class="text-5xl font-serif text-green-900 mb-6">Log in</h2>
+                        </div>
+                        <form onsubmit="handleLogin(event)" class="space-y-6">
+                            <div class="flex justify-center mb-8">
+                                <img src="https://placehold.co/250x150/1E4620/ffffff?text=Composting+Worker" class="rounded-xl shadow-md" alt="Composting illustration">
+                            </div>
+                            ${renderInput('Email', 'email', 'email', 'name@example.com', '✉️')}
+                            ${renderInput('Password', 'password', 'password', 'Enter your password', '🔒')}
+                            <a href="#" class="text-sm text-green-700 hover:underline block text-center mt-3">Forgot Password?</a>
+                            <button type="submit" class="w-full flex justify-center items-center py-3 bg-green-600 text-white text-xl rounded-xl shadow-lg hover:bg-green-700 transition duration-200 mt-8">
+                                Log in <span class="ml-2 text-2xl">→</span>
+                            </button>
+                            <p class="text-center text-sm text-gray-500 mt-4">Don't have account? 
+                                <a href="#" onclick="navigateTo('signup')" class="text-green-700 font-semibold hover:underline">Sign up</a>
+                            </p>
+                        </form>
+                    </div>
+                    <p class="text-xs text-green-300 mt-2">Current User ID: ${window.currentUserId || 'N/A'}</p>
+                </div>
+            `;
+        }
+        function renderMenu() {
+            return `
+                <div class="h-full flex flex-col items-center justify-center p-6">
+                    ${renderHeader('Main Menu')}
+                    <div class="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 flex-grow max-h-[85vh] flex flex-col items-center justify-center space-y-8">
+                        <button onclick="navigateTo('account')" class="w-full py-3 bg-green-600 text-white text-xl rounded-xl shadow-lg hover:bg-green-700 transition duration-200 font-bold">Account</button>
+                        <button onclick="navigateTo('membership')" class="w-full py-3 bg-yellow-500 text-white text-xl rounded-xl shadow-lg hover:bg-yellow-600 transition duration-200 font-bold">Membership</button>
+                        <button onclick="handleLogout()" class="w-full py-3 bg-red-500 text-white text-xl rounded-xl shadow-lg hover:bg-red-600 transition duration-200 font-bold">Logout</button>
+                    </div>
+                    <p class="text-xs text-green-300 mt-2">Current User ID: ${window.currentUserId || 'N/A'}</p>
+                </div>
+            `;
+        }
+        function renderAccount() {
+            const { name, email, foodWasteKg, pickupTime, pickupDay, voucherCount, membership } = window.userData;
+            const currentWaste = foodWasteKg || 0;
+            const wasteGoal = 50;
+            return `
+                <div class="h-full flex flex-col items-center justify-center p-6">
+                    ${renderHeader('Account')}
+                    <div class="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 md:p-8 flex-grow max-h-[85vh] overflow-y-auto">
+                        <div class="flex justify-between items-start mb-6 border-b pb-4 border-gray-100">
+                            <h2 class="text-4xl font-serif text-green-900">Account</h2>
+                            <button onclick="navigateTo('menu')" class="text-green-700 text-2xl font-bold ml-4">☰ Menu</button>
+                        </div>
+                        <div class="mb-8 space-y-2">
+                            <p class="text-lg text-gray-800 font-semibold">${name || 'User Name'}</p>
+                            <p class="text-sm text-gray-500">${email || 'xxx@gmail.com'}</p>
+                            <p class="text-xs text-gray-400">Membership: <span class="font-bold text-green-700">${membership || 'Free'}</span></p>
+                            <p class="text-xs text-gray-400">User ID: ${window.currentUserId ? window.currentUserId.substring(0, 12) : 'N/A'}...</p>
+                        </div>
+                        <h3 class="text-xl font-serif text-green-800 mb-3 border-b pb-2">Your Environmental Impact</h3>
+                        <div class="space-y-4 mb-8">
+                            ${renderMetric('Total Waste Composted', `${currentWaste.toFixed(1)} kg`, 'bg-green-100', '♻️')}
+                            ${renderProgressBar(currentWaste, wasteGoal, `Compost goal for next badge: ${wasteGoal} kg`)}
+                            ${renderPickupStatus(pickupTime, pickupDay)}
+                        </div>
+                        <div class="mt-8 pt-6 border-t border-gray-100">
+                            <h3 class="text-xl font-serif text-green-800 mb-4">Your UAE Eco-Friendly Vouchers (${voucherCount || 0})</h3>
+                            <div class="flex flex-col items-center space-y-4">
+                                <div class="bg-yellow-50 border-2 border-yellow-500 p-4 rounded-xl shadow-xl w-full text-center">
+                                    <div class="flex items-center justify-center space-x-2">
+                                        <span class="text-4xl">💰</span>
+                                        <p class="font-bold text-yellow-800 text-xl">UAE Eco-Friendly Voucher</p>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mt-2">Each voucher worth AED 50. Redeem for discounts or compostable goods.</p>
+                                    <div class="mt-3 text-2xl font-extrabold text-green-700">${voucherCount || 0} Available</div>
+                                </div>
+                                <button onclick="handleCollectReward()" 
+                                    ${voucherCount === 0 ? 'disabled' : ''}
+                                    class="w-full py-3 px-6 text-white text-xl font-bold rounded-xl shadow-lg transition duration-200 
+                                           ${voucherCount > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'}"
+                                >
+                                    ${voucherCount > 0 ? 'Redeem Voucher Now' : 'No Vouchers to Redeem'}
+                                </button>
+                            </div>
+                            <button onclick="navigateTo('menu')" class="w-full text-sm text-blue-600 mt-4 hover:underline font-medium">
+                                Back to Menu
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        function renderMembership() {
+            const membership = window.userData.membership || "Free";
+            const voucherCount = window.userData.voucherCount || 0;
+            return `
+                <div class="h-full flex flex-col items-center justify-center p-6">
+                    ${renderHeader('Membership')}
+                    <div class="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 flex-grow max-h-[85vh] overflow-y-auto">
+                        <div class="mb-6">
+                            <h2 class="text-3xl font-serif text-green-900 mb-2">Membership Plan</h2>
+                            <p class="text-gray-600 text-sm">Your Current Membership: <span class="font-bold text-green-700">${membership}</span></p>
+                            <p class="text-gray-600 text-sm mt-2">Vouchers: <span class="font-bold text-yellow-600">${voucherCount}</span></p>
+                        </div>
+                        <div class="space-y-5">
+                            <div class="border border-green-200 rounded-xl p-4 bg-green-50">
+                                <h3 class="text-xl font-bold text-green-800">Free</h3>
+                                <p class="text-gray-700 text-sm">No monthly fee. No vouchers included. Upgrade for more benefits!</p>
+                            </div>
+                            <div class="border border-yellow-400 rounded-xl p-4 bg-yellow-50">
+                                <h3 class="text-xl font-bold text-yellow-700">Monthly</h3>
+                                <p class="text-gray-700 text-sm">AED 30/month. 1 voucher/month (worth AED 50). Save AED 20!</p>
+                                <button onclick="handleUpgradeMembership('Monthly')" class="mt-2 w-full py-2 bg-yellow-500 text-white text-lg rounded-lg hover:bg-yellow-600 font-bold">Upgrade to Monthly</button>
+                            </div>
+                            <div class="border border-blue-400 rounded-xl p-4 bg-blue-50">
+                                <h3 class="text-xl font-bold text-blue-700">Yearly</h3>
+                                <p class="text-gray-700 text-sm">AED 300/year. 12 vouchers/year (worth AED 600). Save AED 300!</p>
+                                <button onclick="handleUpgradeMembership('Yearly')" class="mt-2 w-full py-2 bg-blue-500 text-white text-lg rounded-lg hover:bg-blue-600 font-bold">Upgrade to Yearly</button>
+                            </div>
+                        </div>
+                        <div class="mt-6 text-center">
+                            <button onclick="navigateTo('menu')" class="text-sm text-green-700 hover:underline font-medium">
+                                Back to Menu
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        function renderInput(label, type, name, placeholder, emoji) {
+            let inputType = type;
+            let patternAttr = '';
+            if (type === 'date') {
+                inputType = 'text';
+                patternAttr = 'pattern="\\d{4}-\\d{2}-\\d{2}" title="Format: YYYY-MM-DD"';
+            }
+            return `
+                <div class="space-y-1">
+                    <label for="${name}" class="block text-sm font-medium text-gray-700">
+                        ${emoji} ${label}
+                    </label>
+                    <input type="${inputType}" id="${name}" name="${name}" placeholder="${placeholder}" 
+                           class="w-full p-3 border-2 border-gray-300 rounded-xl focus:ring-green-600 focus:border-green-600 text-gray-700 transition duration-200"
+                           required
+                           ${patternAttr}>
+                </div>
+            `;
+        }
+        function renderProgressBar(current, goal, label) {
+            const currentFloat = parseFloat(current) || 0;
+            const goalInt = parseInt(goal) || 1;
+            const percentage = Math.min((currentFloat / goalInt) * 100, 100);
+            const widthStyle = `width: ${percentage}%`;
+            const bgColor = percentage >= 100 ? 'bg-yellow-500' : 'bg-green-500';
+            return `
+                <div class="mt-2">
+                    <p class="text-xs text-gray-500 mb-1 font-medium">${label}</p>
+                    <div class="w-full bg-gray-200 rounded-full h-3">
+                        <div class="${bgColor} h-3 rounded-full transition-all duration-500" style="${widthStyle}"></div>
+                    </div>
+                    <p class="text-xs text-right text-gray-600 mt-1 font-semibold">${currentFloat.toFixed(1)} / ${goalInt} kg (${Math.round(percentage)}%)</p>
+                </div>
+            `;
+        }
+        function renderMetric(title, value, bgColor, icon) {
+            return `
+                <div class="flex items-center space-x-3">
+                    <span class="text-2xl">${icon}</span>
+                    <div class="flex-grow flex justify-between items-center ${bgColor} text-green-900 font-semibold p-3 rounded-xl shadow-sm">
+                        <span class="text-sm uppercase">${title}</span>
+                        <span class="text-lg font-bold">${value}</span>
+                    </div>
+                </div>
+            `;
+        }
+        function renderPickupStatus(time, day) {
+            return `
+                <div class="border-2 border-green-500 rounded-xl p-4 shadow-md bg-white mt-4">
+                    <div class="flex items-center space-x-3 mb-3">
+                        <span class="text-3xl">🚚</span>
+                        <span class="bg-green-100 text-green-800 font-bold px-3 py-1 rounded-full text-sm">Pick Up Scheduled</span>
+                    </div>
+                    <div class="flex justify-between items-center text-gray-700 space-y-2">
+                        <div class="flex flex-col items-center">
+                            <span class="text-xl">🕒</span>
+                            <span class="text-xs uppercase font-medium mt-1">Time</span>
+                            <span class="font-bold text-sm">${time || 'XX:XX'}</span>
+                        </div>
+                        <div class="flex flex-col items-center">
+                            <span class="text-xl">📅</span>
+                            <span class="text-xs uppercase font-medium mt-1">Day</span>
+                            <span class="font-bold text-sm">${day || 'XXXXXX'}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        window.renderApp = () => {
+            const appContainer = document.getElementById('app-container');
+            if (!appContainer) return;
+            let content = '';
+            switch (window.currentView) {
+                case 'signup':
+                    content = renderSignUp();
+                    break;
+                case 'login':
+                    content = renderLogin();
+                    break;
+                case 'menu':
+                    content = renderMenu();
+                    break;
+                case 'membership':
+                    content = renderMembership();
+                    break;
+                case 'account':
+                    content = renderAccount();
+                    break;
+                case 'loading':
+                default:
+                    content = `<div class="flex flex-col items-center justify-center h-full">
+                                <div class="animate-spin rounded-full h-16 w-16 border-b-4 border-green-500"></div>
+                                <p class="mt-4 text-white">Loading app...</p>
+                                <p class="mt-2 text-xs text-green-300">Authenticating user...</p>
+                               </div>`;
+                    break;
+            }
+            appContainer.innerHTML = renderMessage() + content;
+        };
+        window.onload = initializeAndAuthenticate;
+    </script>
+    <style>
+        body {
+            background-color: #1E4620;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 0;
+        }
+        #app-container {
+            max-width: 450px;
+            width: 100%;
+            height: 100vh;
+            background-color: #1E4620; 
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+        }
+        .font-serif {
+            font-family: 'Georgia', 'Times New Roman', serif;
+        }
+    </style>
+</head>
+<body class="bg-green-900">
+    <div id="app-container" class="relative"></div>
+</body>
+</html>
